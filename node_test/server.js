@@ -52,6 +52,60 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
+// 로그인 API 엔드포인트
+app.post('/api/login', async (req, res) => {
+  try {
+    // 클라이언트로부터 받은 form 데이터 추출
+    const {userId, info} = req.body;
+
+    // DB 연결
+    const connection = await oracledb.getConnection();
+
+    // 아이디 검증
+    const loginId = await connection.execute('SELECT info, salt FROM Sign WHERE userId = :userId', [userId]);
+    // 아이디가 일치하지 않을 경우
+    if (loginId.rows.length == 0) {
+      connection.release();
+      return res.status(400).json({ error: '아이디를 다시 입력해 주세요' });
+    }
+
+    connection.release();
+
+    // 비밀번호 검증 작업
+    // Node.js의 내장 모듈인 util 모듈의 promisify() 메소드를 사용
+    const pbkdf2Promise = util.promisify(crypto.pbkdf2); // crypto 모듈의 rbkdf2() 메소드를 사용 - 비밀번호 암호화
+    // 비밀번호 Hash(단방향) 암호화
+    const verifyInfo = async (info, userSalt, userInfo) => { // 인자로 로그인시 입력한 비밀번호와 DB에서 가져온 salt와 비밀번호를 사용
+      // 단방향 암호화에서 많이 사용되는 crypto 모듈의 pbkdf2() 메소드를 사용
+      // 총 5개의 인자 값 - 해싱할 값 / salt / 해시 함수 반복 횟수 / 해시 값 길이 / 해시 알고리즘
+      // 로그인시 입력한 비밀번호를 회원가입시 암호화한 방식과 동일하게 암호화 작업
+      const key = await pbkdf2Promise(info, userSalt, 102938, 64, 'sha512');
+      // buffer 형식을 가지고 있으므로 base64 문자열로 변경하여 랜덤 문자열 생성
+      const hashedInfo = key.toString('base64');
+
+      // DB에서 가져온 Hash 비밀번호와 위에서 생성한 Hash 로그인 비밀번호를 비교
+      if (hashedInfo === userInfo) {
+        // 비밀번호 일치
+        return true;
+      } else {
+        // 비밀번호 불일치
+        return false;
+      }
+    };
+    // 위에서 정의한 verifyInfo() 메소드를 통해 로그인시 입력한 비밀번호를 Hash 비밀번호로 변환 하여 DB에서 가져온 비밀번호와 비교
+    const loginInfo = await verifyInfo(info, loginId.rows[0][1], loginId.rows[0][0]); // 인자로 로그인시 입력한 비밀번호와 DB에서 가져온 salt와 비밀번호를 사용
+    // 비밀번호가 일치하지 않을 경우
+    if (!loginInfo) {
+      return res.status(400).json({ error: '비밀번호를 다시 입력해 주세요' });
+    }
+
+    res.json({ success: true, message: '로그인 되었습니다.' });
+  } catch (error) {
+    console.error('로그인 에러', error);
+    res.status(500).json({ error: '로그인 에러가 발생했습니다.' });
+  }
+});
+
 // 아이디 중복 확인 API 엔드포인트
 app.get('/api/duplicateIdCheck/:userId', async (req, res) => {
   try {
@@ -74,9 +128,6 @@ app.get('/api/duplicateIdCheck/:userId', async (req, res) => {
     res.status(500).json({error: '아이디 중복 확인 에러'});
   }
 });
-
-// JSON 파싱 미들웨어 추가
-app.use(express.json());
 
 // 회원가입 API 엔드포인트
 app.post('/api/join', async (req, res) => {
@@ -105,7 +156,7 @@ app.post('/api/join', async (req, res) => {
       const buffer = await randomBytesPromise(64);
 
       // buffer 형식을 가지고 있으므로 base64 문자열로 변경하여 랜덤 문자열 생성
-      return buffer.toString("base64");
+      return buffer.toString('base64');
     };
     // 비밀번호 Hash(단방향) 암호화
     const createHashedInfo = async (info) => { // 인자로 회원가입시 입력한 비밀번호를 사용
@@ -113,9 +164,9 @@ app.post('/api/join', async (req, res) => {
       const salt = await createSalt();
       // 단방향 암호화에서 많이 사용되는 crypto 모듈의 pbkdf2() 메소드를 사용
       // 총 5개의 인자 값 - 해싱할 값 / salt / 해시 함수 반복 횟수 / 해시 값 길이 / 해시 알고리즘
-      const key = await pbkdf2Promise(info, salt, 102938, 64, "sha512");
+      const key = await pbkdf2Promise(info, salt, 102938, 64, 'sha512');
       // buffer 형식을 가지고 있으므로 base64 문자열로 변경하여 랜덤 문자열 생성
-      const hashedInfo = key.toString("base64");
+      const hashedInfo = key.toString('base64');
 
       // 생성된 Hash 비밀번호와 salt를 반환
       return { hashedInfo, salt };
