@@ -1,3 +1,6 @@
+const util = require('util');
+const crypto = require('crypto');
+
 const express = require('express');
 var oracledb = require('oracledb');
 var dbConfig = require('./dbConfig');
@@ -92,8 +95,36 @@ app.post('/api/join', async (req, res) => {
       return res.status(400).json({ error: '중복된 아이디가 이미 존재합니다.' });
     }
 
+    // 비밀번호 Hash 암호화 작업
+    // Node.js의 내장 모듈인 util 모듈의 promisify() 메소드를 사용
+    const randomBytesPromise = util.promisify(crypto.randomBytes); // crypto 모듈의 randomBytes() 메소드를 사용 - salt 생성
+    const pbkdf2Promise = util.promisify(crypto.pbkdf2); // crypto 모듈의 rbkdf2() 메소드를 사용 - 비밀번호 암호화
+    // salt 생성 - 이후 검증을 위해 비밀번호와 함께 DB에 저장
+    const createSalt = async () => {
+      // crypto 모듈의 randomBytes() 메소드를 통해 64바이트 길이로 생성
+      const buffer = await randomBytesPromise(64);
+
+      // buffer 형식을 가지고 있으므로 base64 문자열로 변경하여 랜덤 문자열 생성
+      return buffer.toString("base64");
+    };
+    // 비밀번호 Hash(단방향) 암호화
+    const createHashedInfo = async (info) => { // 인자로 회원가입시 입력한 비밀번호를 사용
+      // 위에서 정의한 createSalt() 메소드를 통해 salt 생성
+      const salt = await createSalt();
+      // 단방향 암호화에서 많이 사용되는 crypto 모듈의 pbkdf2() 메소드를 사용
+      // 총 5개의 인자 값 - 해싱할 값 / salt / 해시 함수 반복 횟수 / 해시 값 길이 / 해시 알고리즘
+      const key = await pbkdf2Promise(info, salt, 102938, 64, "sha512");
+      // buffer 형식을 가지고 있으므로 base64 문자열로 변경하여 랜덤 문자열 생성
+      const hashedInfo = key.toString("base64");
+
+      // 생성된 Hash 비밀번호와 salt를 반환
+      return { hashedInfo, salt };
+    };
+    // 위에서 정의한 createHashedInfo() 메소드를 통해 회원가입시 입력한 비밀번호를 Hash 비밀번호로 변환 및 salt 생성
+    hashedInfo = await createHashedInfo(info); // 인자로 회원가입시 입력한 비밀번호를 사용
+
     // 회원가입 정보를 DB에 삽입
-    await connection.execute('INSERT INTO Sign (idx, userId, info, name) VALUES (seq_join_idx.nextval, :userId, :info, :name)', [userId, info, name]);
+    await connection.execute('INSERT INTO Sign (idx, userId, info, salt, name) VALUES (seq_join_idx.nextval, :userId, :info, :salt, :name)', [userId, hashedInfo.hashedInfo, hashedInfo.salt, name]);
 
     // 커밋 수행
     await connection.commit();
